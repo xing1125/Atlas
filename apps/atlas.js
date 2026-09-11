@@ -1,7 +1,6 @@
 import plugin from '../../../lib/plugins/plugin.js'
 import fs from 'node:fs'
 import YAML from 'yaml'
-import gsCfg from '../../genshin/model/gsCfg.js'
 import puppeteer from '../../../lib/puppeteer/puppeteer.js'
 import { pluginRoot, pluginResources } from '../model/path.js'
 import Reply from '../model/reply.js'
@@ -17,7 +16,12 @@ let atlasConfig = YAML.parse(fs.readFileSync(`${pluginResources}/config.yaml`, '
 export class atlas extends plugin {
   constructor () {
     let rule = {
-      reg: '^[#/]?.+(图鉴)*',
+      reg: '^[#/]?.+图鉴$',
+      fnc: 'atlas'
+    }
+    // 专武简写：#丝柯克专武 等 → 经 atlas 内部别名表解析为 #苍耀图鉴 后直发详情图
+    let weaponShortcutRule = {
+      reg: '^[#/]?.+专武$',
       fnc: 'atlas'
     }
     super({
@@ -25,10 +29,11 @@ export class atlas extends plugin {
       dsc: '原神各类图鉴与角色材料，支持热更新',
       event: 'message',
       priority: atlasConfig.priority,
-      rule: [rule]
+      rule: [rule, weaponShortcutRule]
     })
     this.islog = false
     Object.defineProperty(rule, 'log', { get: () => this.islog })
+    Object.defineProperty(weaponShortcutRule, 'log', { get: () => this.islog })
   }
 
   getLibraryResourcePath (libName) {
@@ -68,6 +73,30 @@ export class atlas extends plugin {
     let msg
     try { msg = e.msg.trim() } catch (e) { return false }
     if ((typeof msg != 'string') || msg.constructor !== String) { return false }
+
+    // —— 简写指令：#角色名专武 / #XX套 → 查逍遥别名表转成 Atlas 标准图鉴口令 ——
+    let aliasTarget = msg.replace(/^[#＃\/]+/, '')
+    if (/专武$/.test(aliasTarget)) {
+      try {
+        const wqFile = `${process.cwd()}/plugins/xiaoyao-cvs-plugin/resources/Atlas_alias/wuqi_tujian.yaml`
+        if (fs.existsSync(wqFile)) {
+          const aliasMap = YAML.parse(fs.readFileSync(wqFile, 'utf8'))
+          for (const weaponName of Object.keys(aliasMap)) {
+            if ((aliasMap[weaponName] || []).includes(aliasTarget)) { msg = `#${weaponName}图鉴`; break }
+          }
+        }
+      } catch (err) { logger.debug(`[Atlas] 专武别名解析失败: ${err.message}`) }
+    } else if (/套$/.test(aliasTarget)) {
+      try {
+        const syFile = `${process.cwd()}/plugins/xiaoyao-cvs-plugin/resources/Atlas_alias/shengyiwu_tujian.yaml`
+        if (fs.existsSync(syFile)) {
+          const aliasMap = YAML.parse(fs.readFileSync(syFile, 'utf8'))
+          for (const setName of Object.keys(aliasMap)) {
+            if ((aliasMap[setName] || []).includes(aliasTarget)) { msg = `#${setName}图鉴`; break }
+          }
+        }
+      } catch (err) { logger.debug(`[Atlas] 圣遗物别名解析失败: ${err.message}`) }
+    }
 
     // 检查是否在响应索引
     if (context[this.e.user_id]) { if (await this.select(e)) { delete num[this.e.user_id] } }
@@ -352,11 +381,18 @@ export class atlas extends plugin {
     }
 
     // 4. 原神角色相关图鉴交由云崽本体功能进行处理
+    // 注意：gsCfg 仅在角色图鉴时需要，且其依赖在 Karin 下可能加载失败（#index 子路径未定义）。
+    // 改为按需动态导入并兜底，避免静态导入失败导致整个 Atlas 插件无法加载（武器/圣遗物等全部失效）。
     let finalName = hasReplaced ? replacedName : originName
     if (sync.includes("role") && libName.includes("原神")) {
-      let rolename = gsCfg.getRole(finalName)
-      if (!rolename && hasReplaced) rolename = gsCfg.getRole(originName) // 兜底
-      if (rolename) return rolename.name
+      try {
+        const gsCfg = (await import('../../genshin/model/gsCfg.js')).default
+        let rolename = gsCfg.getRole(finalName)
+        if (!rolename && hasReplaced) rolename = gsCfg.getRole(originName) // 兜底
+        if (rolename) return rolename.name
+      } catch (err) {
+        logger.debug(`[Atlas] gsCfg 加载失败，跳过角色名解析：${err.message}`)
+      }
     }
 
     // 5. 都没有，直接返回处理后的名字
