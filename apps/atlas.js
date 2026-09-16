@@ -12,6 +12,17 @@ import { alias as GsCharAlias } from '../../miao-plugin/resources/meta-gs/charac
 let context = {} // 索引表
 let num = {} // 计数器
 
+// 本地覆盖层：放上游（听语惊花 Genshin-Atlas 镜像）尚未收录的新武器，
+// 避免直接往镜像仓库手改 path.json / png 导致日后 git pull 上游冲突。
+// 结构同 path.json：{ "weapon": { "武器名": "/weapon/武器名.png" } }，
+// 图片置于 resource/override/ 下对应子目录。
+let overrideMap = {}
+const OVERRIDE_DIR = `${pluginResources}/override`
+try {
+  const ovFile = `${OVERRIDE_DIR}/path.json`
+  if (fs.existsSync(ovFile)) overrideMap = JSON.parse(fs.readFileSync(ovFile, 'utf-8'))
+} catch (e) { logger.debug(`[Atlas] 读取覆盖层 path.json 失败: ${e.message}`) }
+
 // 检查配置文件
 if (!fs.existsSync(`${pluginResources}/config.yaml`)) { fs.copyFileSync(`${pluginResources}/config_default.yaml`, `${pluginResources}/config.yaml`) }
 let atlasConfig = YAML.parse(fs.readFileSync(`${pluginResources}/config.yaml`, 'utf8'))
@@ -140,7 +151,17 @@ export class atlas extends plugin {
           // 别名转正名
           let rightname = await this.getName(Tmpmsg, sync, rule.mode, listElement)
 
-          // 检查资源是否存在
+          // 本地覆盖层优先（上游未收录的新武器）
+          if (overrideMap[sync] && rightname in overrideMap[sync]) {
+            const opath = `${OVERRIDE_DIR}${overrideMap[sync][rightname]}`
+            if (fs.existsSync(opath)) {
+              this.reply(global.segment.image('file://' + opath))
+              this.islog = true
+              return atlasConfig.success
+            }
+          }
+
+          // 检查资源是否存在（Genshin-Atlas 等上游镜像）
           if (rightname in imagePath[sync]) {
             let path = `${libpath}${imagePath[sync][rightname]}`
             if (fs.existsSync(path)) {
