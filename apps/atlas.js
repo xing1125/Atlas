@@ -5,6 +5,9 @@ import puppeteer from '../../../lib/puppeteer/puppeteer.js'
 import { pluginRoot, pluginResources } from '../model/path.js'
 import Reply from '../model/reply.js'
 import { library, list } from '../model/moreLib.js'
+// 专武兜底数据源：liangshi 的「角色→专武」映射（随版本更新）+ miao 角色别名归一化
+import { exclusive as GsExclusive } from '../../liangshi-calc/damage/liangshi-gs/data/weapon.js'
+import { alias as GsCharAlias } from '../../miao-plugin/resources/meta-gs/character/alias.js'
 
 let context = {} // 索引表
 let num = {} // 计数器
@@ -77,6 +80,7 @@ export class atlas extends plugin {
     // —— 简写指令：#角色名专武 / #XX套 → 查逍遥别名表转成 Atlas 标准图鉴口令 ——
     let aliasTarget = msg.replace(/^[#＃\/]+/, '')
     if (/专武$/.test(aliasTarget)) {
+      const originalMsg = msg
       try {
         const wqFile = `${process.cwd()}/plugins/xiaoyao-cvs-plugin/resources/Atlas_alias/wuqi_tujian.yaml`
         if (fs.existsSync(wqFile)) {
@@ -86,6 +90,21 @@ export class atlas extends plugin {
           }
         }
       } catch (err) { logger.debug(`[Atlas] 专武别名解析失败: ${err.message}`) }
+      // 兜底：yaml 未命中时，走 liangshi 专武表（角色→武器）+ miao 角色别名归一化
+      // 这样以后新角色只要 liangshi 更新了 exclusive 映射，#XX专武 自动生效，无需再手填 yaml
+      if (msg === originalMsg) {
+        try {
+          const charPart = aliasTarget.replace(/专武$/, '')
+          let canonical = GsCharAlias[charPart] ? charPart : null
+          if (!canonical) {
+            for (const [k, v] of Object.entries(GsCharAlias)) {
+              if (v.split(',').map(s => s.trim()).includes(charPart)) { canonical = k; break }
+            }
+          }
+          const weapon = canonical ? GsExclusive[canonical] : GsExclusive[charPart]
+          if (weapon) msg = `#${weapon}图鉴`
+        } catch (err) { logger.debug(`[Atlas] 专武兜底解析失败: ${err.message}`) }
+      }
     } else if (/套$/.test(aliasTarget)) {
       try {
         const syFile = `${process.cwd()}/plugins/xiaoyao-cvs-plugin/resources/Atlas_alias/shengyiwu_tujian.yaml`
