@@ -5,9 +5,22 @@ import puppeteer from '../../../lib/puppeteer/puppeteer.js'
 import { pluginRoot, pluginResources } from '../model/path.js'
 import Reply from '../model/reply.js'
 import { library, list } from '../model/moreLib.js'
-// 专武兜底数据源：liangshi 的「角色→专武」映射（随版本更新）+ miao 角色别名归一化
-import { exclusive as GsExclusive } from '../../liangshi-calc/damage/liangshi-gs/data/weapon.js'
+// 专武兜底数据源：miao 角色别名归一化（随版本更新）
 import { alias as GsCharAlias } from '../../miao-plugin/resources/meta-gs/character/alias.js'
+// 专武兜底数据源：liangshi 的「角色→专武」映射（随版本更新）
+// 注意：liangshi-calc 插件可能未安装，改为懒加载 + 容错，避免 Atlas 整体加载失败
+let GsExclusive = null
+async function loadGsExclusive () {
+  if (GsExclusive !== null) return GsExclusive
+  try {
+    const mod = await import('../../liangshi-calc/damage/liangshi-gs/data/weapon.js')
+    GsExclusive = mod.exclusive || {}
+  } catch (e) {
+    logger.debug(`[Atlas] 未找到 liangshi-calc 专武表（${e.message}），#XX专武 兜底降级为仅走逍遥别名表`)
+    GsExclusive = {}
+  }
+  return GsExclusive
+}
 
 let context = {} // 索引表
 let num = {} // 计数器
@@ -105,6 +118,7 @@ export class atlas extends plugin {
       // 这样以后新角色只要 liangshi 更新了 exclusive 映射，#XX专武 自动生效，无需再手填 yaml
       if (msg === originalMsg) {
         try {
+          const excl = await loadGsExclusive()
           const charPart = aliasTarget.replace(/专武$/, '')
           let canonical = GsCharAlias[charPart] ? charPart : null
           if (!canonical) {
@@ -112,7 +126,7 @@ export class atlas extends plugin {
               if (v.split(',').map(s => s.trim()).includes(charPart)) { canonical = k; break }
             }
           }
-          const weapon = canonical ? GsExclusive[canonical] : GsExclusive[charPart]
+          const weapon = canonical ? excl[canonical] : excl[charPart]
           if (weapon) msg = `#${weapon}图鉴`
         } catch (err) { logger.debug(`[Atlas] 专武兜底解析失败: ${err.message}`) }
       }
