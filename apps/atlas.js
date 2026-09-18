@@ -30,11 +30,56 @@ let num = {} // 计数器
 // 结构同 path.json：{ "weapon": { "武器名": "/weapon/武器名.png" } }，
 // 图片置于 resource/override/ 下对应子目录。
 let overrideMap = {}
+let overrideMtime = 0
 const OVERRIDE_DIR = `${pluginResources}/override`
-try {
-  const ovFile = `${OVERRIDE_DIR}/path.json`
-  if (fs.existsSync(ovFile)) overrideMap = JSON.parse(fs.readFileSync(ovFile, 'utf-8'))
-} catch (e) { logger.debug(`[Atlas] 读取覆盖层 path.json 失败: ${e.message}`) }
+// 覆盖层按 mtime 热加载：新增武器/圣遗物改 override/path.json 后无需冷重启
+function loadOverrideMap (force = false) {
+  try {
+    const ovFile = `${OVERRIDE_DIR}/path.json`
+    let mtime = 0
+    try { mtime = fs.statSync(ovFile).mtimeMs } catch (err) { /* 文件尚不存在 */ }
+    if (!force && mtime === overrideMtime) return
+    overrideMtime = mtime
+    if (fs.existsSync(ovFile)) overrideMap = JSON.parse(fs.readFileSync(ovFile, 'utf-8'))
+  } catch (e) { logger.debug(`[Atlas] 读取覆盖层 path.json 失败: ${e.message}`) }
+}
+loadOverrideMap(true)
+
+// —— 裸名简写速查表（武器+套装+override 直挂名），按 yaml mtime 指纹缓存 ——
+let shortcutMap = {}
+let shortcutSig = ''
+function buildShortcutMap () {
+  const map = {}
+  const addYaml = (file) => {
+    try {
+      if (!fs.existsSync(file)) return
+      const obj = YAML.parse(fs.readFileSync(file, 'utf8')) || {}
+      for (const key of Object.keys(obj)) {
+        if (!key) continue
+        map[key] = key
+        for (const alias of (obj[key] || [])) { if (alias) map[alias] = key }
+      }
+    } catch (e) { logger.debug(`[Atlas] 读取简写别名表失败 ${file}: ${e.message}`) }
+  }
+  addYaml(`${process.cwd()}/plugins/xiaoyao-cvs-plugin/resources/Atlas_alias/wuqi_tujian.yaml`)
+  addYaml(`${process.cwd()}/plugins/xiaoyao-cvs-plugin/resources/Atlas_alias/shengyiwu_tujian.yaml`)
+  for (const sync of ['weapon', 'artifact']) {
+    for (const key of Object.keys(overrideMap[sync] || {})) map[key] = key
+  }
+  return map
+}
+function getNameShortcut (name) {
+  const dir = `${process.cwd()}/plugins/xiaoyao-cvs-plugin/resources/Atlas_alias`
+  let sig = `${overrideMtime}`
+  for (const f of ['wuqi_tujian.yaml', 'shengyiwu_tujian.yaml']) {
+    try { sig += '|' + fs.statSync(`${dir}/${f}`).mtimeMs } catch (err) { sig += '|0' }
+  }
+  if (sig !== shortcutSig || !Object.keys(shortcutMap).length) {
+    shortcutMap = buildShortcutMap()
+    shortcutSig = sig
+  }
+  return shortcutMap[name] || null
+}
 
 // 检查配置文件
 if (!fs.existsSync(`${pluginResources}/config.yaml`)) { fs.copyFileSync(`${pluginResources}/config_default.yaml`, `${pluginResources}/config.yaml`) }
@@ -51,16 +96,28 @@ export class atlas extends plugin {
       reg: '^[#/]?.+专武$',
       fnc: 'atlas'
     }
+    // 套装简写：#血红套 / #长夜之誓套 等 → 经 shengyiwu_tujian.yaml 解析为 #套装名图鉴
+    let setShortcutRule = {
+      reg: '^[#/]?.+套$',
+      fnc: 'atlas'
+    }
+    // 裸名简写：#血红之证 / #蝶变 等 → 命中武器/套装别名表才接管转 #XX图鉴，未命中放行给其他插件
+    let nameShortcutRule = {
+      reg: '^[#/].+$',
+      fnc: 'nameShortcut'
+    }
     super({
       name: 'Atlas图鉴',
       dsc: '原神各类图鉴与角色材料，支持热更新',
       event: 'message',
       priority: atlasConfig.priority,
-      rule: [rule, weaponShortcutRule]
+      rule: [rule, weaponShortcutRule, setShortcutRule, nameShortcutRule]
     })
     this.islog = false
     Object.defineProperty(rule, 'log', { get: () => this.islog })
     Object.defineProperty(weaponShortcutRule, 'log', { get: () => this.islog })
+    Object.defineProperty(setShortcutRule, 'log', { get: () => this.islog })
+    Object.defineProperty(nameShortcutRule, 'log', { get: () => this.islog })
   }
 
   getLibraryResourcePath (libName) {
@@ -96,6 +153,8 @@ export class atlas extends plugin {
   }
 
   async atlas (e) {
+    // 覆盖层热加载（mtime 变了才重读，几乎零开销）
+    loadOverrideMap()
     // 提取有效口令
     let msg
     try { msg = e.msg.trim() } catch (e) { return false }
@@ -194,6 +253,16 @@ export class atlas extends plugin {
       }
     }
     return this.islog
+  }
+
+  // 裸名简写：#血红之证 / #蝶变 等 → 命中别名表才转 #XX图鉴，未命中放行给其他插件
+  async nameShortcut (e) {
+    const name = (e.msg || '').trim().replace(/^[#/]+/, '').trim()
+    if (!name || /(图鉴|专武|套)$/.test(name)) return false
+    const hit = getNameShortcut(name)
+    if (!hit) return false
+    e.msg = `#${hit}图鉴`
+    return this.atlas(e)
   }
 
   async index (sync, key, rule, libpath) {
