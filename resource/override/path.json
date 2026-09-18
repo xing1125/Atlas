@@ -8,5 +8,11 @@
     "凝雪沉心": "/weapon/凝雪沉心.png",
     "柔风游弦": "/weapon/柔风游弦.png",
     "银釭": "/weapon/银釭.png"
+  },
+  "artifact": {
+    "天之美赐": "/artifact/天之美赐.png",
+    "影中沉凝的幻灭": "/artifact/影中沉凝的幻灭.png",
+    "风起之日": "/artifact/风起之日.png",
+    "晨星与月的晓歌": "/artifact/晨星与月的晓歌.png"
   }
 }
