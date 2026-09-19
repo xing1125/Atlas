@@ -224,13 +224,17 @@ export class atlas extends plugin {
           // 别名转正名
           let rightname = await this.getName(Tmpmsg, sync, rule.mode, listElement)
 
-          // 本地覆盖层优先（上游未收录的新武器）
-          if (overrideMap[sync] && rightname in overrideMap[sync]) {
-            const opath = `${OVERRIDE_DIR}${overrideMap[sync][rightname]}`
-            if (fs.existsSync(opath)) {
-              this.reply(global.segment.image('file://' + opath))
-              this.islog = true
-              return atlasConfig.success
+          // 本地覆盖层优先（上游未收录的新武器/角色材料等）。
+          // 遍历覆盖层所有模块键，不依赖上游 path.json 是否含该模块，
+          // 保证 nanoka 补图与手加图都能命中，且命令路径完全本地、不碰网络。
+          for (const mod of Object.keys(overrideMap)) {
+            if (rightname in overrideMap[mod]) {
+              const opath = `${OVERRIDE_DIR}${overrideMap[mod][rightname]}`
+              if (fs.existsSync(opath)) {
+                this.reply(global.segment.image('file://' + opath))
+                this.islog = true
+                return atlasConfig.success
+              }
             }
           }
 
